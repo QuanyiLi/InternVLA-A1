@@ -57,6 +57,7 @@
 
 ## 📢 News
 
+- **[2026/02/27]** Support weighting different datasets during training. 
 - **[2026/01/23]** InternVLA-A1-3B achieves State-of-The-Art result on RoboTwin 2.0 benchmark! We have released the finetuned model **InternVLA-A1-3B-RoboTwin** on 🤗 [HuggingFace](https://huggingface.co/InternRobotics/InternVLA-A1-3B-RoboTwin).
 - **[2026/01/14]** We release the Pre-training code and guidelines of InternVLA-A1-3B.
 - **[2026/01/07]** We released our [paper](https://arxiv.org/pdf/2601.02456) on arXiv.

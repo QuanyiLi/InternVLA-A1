@@ -1050,6 +1050,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks.iloc[task_idx].name
+        
+        # Add robot_type as a string
+        item["robot_type"] = self.meta.robot_type
         return item
 
     def __repr__(self):

@@ -13,9 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import re
 import logging
 from pprint import pformat
 from pathlib import Path
+from collections import defaultdict
+from omegaconf import OmegaConf, DictConfig
 
 import math
 import torch
@@ -188,6 +191,77 @@ def compute_balanced_repo_assignment(
     return rank_to_repos
 
 
+def compute_repo_weights(
+    repo_ids: list[str],
+    frames_map: dict[str, int],
+    episodes_map: dict[str, int],
+    groups_cfg: DictConfig,
+) -> dict[str, float]:
+    """
+    Compute global repo-level sampling weights from YAML group config.
+
+    Returns:
+        dict[str, float]: repo_id -> normalized weight (sum to 1)
+    """
+    repo_to_group = {}
+    group_to_repos = defaultdict(list)
+
+    for rid in repo_ids:
+        matched = False
+        for g in groups_cfg.groups:
+            if re.search(g.match, rid):
+                repo_to_group[rid] = g.name
+                group_to_repos[g.name].append(rid)
+                matched = True
+                break
+        if not matched:
+            repo_to_group[rid] = "__default__"
+            group_to_repos["__default__"].append(rid)
+
+    group_budget = {}
+    for g in groups_cfg.groups:
+        group_budget[g.name] = float(g.total_weight)
+
+    if "__default__" in group_to_repos:
+        group_budget["__default__"] = float(groups_cfg.default.total_weight)
+
+    repo_weights = {}
+
+    for group_name, repos in group_to_repos.items():
+        budget = group_budget[group_name]
+
+        if group_name == "__default__":
+            inside = groups_cfg.default.inside
+            gamma = float(getattr(groups_cfg.default, "gamma", 1.0))
+        else:
+            g = next(x for x in groups_cfg.groups if x.name == group_name)
+            inside = g.inside
+            gamma = float(getattr(g, "gamma", 1.0))
+
+        # compute raw scores
+        scores = []
+        for rid in repos:
+            if inside == "frames_pow":
+                s = frames_map[rid] ** gamma
+            elif inside == "episodes_pow":
+                s = episodes_map[rid] ** gamma
+            elif inside == "uniform":
+                s = 1.0
+            else:
+                raise ValueError(f"Unknown inside mode: {inside}")
+            scores.append(s)
+
+        total = sum(scores)
+        for rid, s in zip(repos, scores):
+            repo_weights[rid] = budget * (s / total)
+
+    Z = sum(repo_weights.values())
+    for rid in repo_weights:
+        repo_weights[rid] /= Z
+
+    return repo_weights
+
+
 def resolve_delta_timestamps(
     cfg: PreTrainedConfig, ds_meta: LeRobotDatasetMetadata
 ) -> dict[str, list] | None:
@@ -284,7 +358,7 @@ def _build_single_dataset(
             root=cfg.dataset.root,
             episodes=cfg.dataset.episodes,
             delta_timestamps=delta_timestamps,
-            # tolerance_s=0.0002, 
+            # tolerance_s=0.2, 
             image_transforms=image_transforms,
             revision=cfg.dataset.revision,
             video_backend=cfg.dataset.video_backend,
@@ -348,11 +422,23 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | StreamingLeRobotD
     logging.info(
         f"[make_dataset] all_repo_ids={all_repo_ids}"
     )
+
+    frames_map, episodes_map = load_info_for_repos(cfg, all_repo_ids)
+    if cfg.dataset.weight_rules_path is not None:
+        weight_cfg = OmegaConf.load(cfg.dataset.weight_rules_path)
+        repo_weights_map = compute_repo_weights(
+            all_repo_ids,
+            frames_map,
+            episodes_map,
+            weight_cfg,
+        )
+    else:
+        repo_weights_map = None
+    
     rank, world_size = get_rank_and_world_size()
     if cfg.dataset.dist_loading:
         # Try to balance by total_frames first.
         try:
-            frames_map, episodes_map = load_info_for_repos(cfg, all_repo_ids)
             rank_to_repos = compute_balanced_repo_assignment(
                 all_repo_ids,
                 frames_map,
@@ -373,10 +459,19 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | StreamingLeRobotD
     else:
         repo_ids = all_repo_ids
 
-    print(
-        f"rank={rank}/{world_size}, repo_ids_for_this_rank:\n"
-        + "\n".join(f"[rank {rank}] repo_id = {rid}" for rid in repo_ids)
-    )
+    if repo_weights_map is not None:
+        print(
+            f"[rank={rank:02d}/{world_size:02d}], repo_ids_for_this_rank:\n"
+            + "\n".join(
+                f"[rank {rank}] repo_id = {rid}, weight = {repo_weights_map[rid]:.6f}"
+                for rid in repo_ids
+            )
+        )
+    else:
+        print(
+            f"[rank={rank:02d}/{world_size:02d}], repo_ids_for_this_rank:\n"
+            + "\n".join(f"[rank {rank}] repo_id = {rid}" for rid in repo_ids)
+        )
 
     if len(repo_ids) == 1:
         repo_id = repo_ids[0]
@@ -397,9 +492,14 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | StreamingLeRobotD
         transformed_datasets.append(transformed_ds)
         all_data_stats[robot_type] = stats_copy  # TODO: If multiple repos share robot_type, last one overwrites.
 
+    dataset_weights = [
+            repo_weights_map[ds.repo_id]
+            for ds in transformed_datasets
+        ] if repo_weights_map is not None else None
+    
     if not cfg.dataset.streaming:
-        multi_ds = MultiLeRobotDataset(transformed_datasets)
+        multi_ds = MultiLeRobotDataset(transformed_datasets, dataset_weights=dataset_weights)
     else:
-        multi_ds = MultiStreamingLeRobotDataset(transformed_datasets, seed=cfg.seed)
+        multi_ds = MultiStreamingLeRobotDataset(transformed_datasets, dataset_weights=dataset_weights, seed=cfg.seed)
 
     return multi_ds, all_data_stats

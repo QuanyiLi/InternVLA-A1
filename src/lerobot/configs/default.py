@@ -39,6 +39,7 @@ class DatasetConfig(draccus.ChoiceRegistry, abc.ABC):
     use_imagenet_stats: bool = True
     use_external_stats: bool = False
     external_stats_path: str | None = None
+    weight_rules_path: str | None = None
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
     dist_loading: bool = False
