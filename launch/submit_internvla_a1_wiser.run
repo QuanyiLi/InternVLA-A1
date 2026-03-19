@@ -19,6 +19,8 @@ CONDA_ROOT="/work/vita/lanfeng/miniconda3"              # TODO: set your conda r
 CONDA_ENV="internvla"
 CUDA_HOME="/usr/local/cuda-12.8"                        # TODO: verify cuda path
 
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate ${CONDA_ENV}
 
 export CUDA_HOME="${CUDA_HOME}"
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
@@ -47,7 +49,7 @@ export LEROBOT_VIDEO_BACKEND=pyav
 # Paths
 ###############################################################################
 PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"       # TODO: set InternVLA-A1 root
-DATASET_ROOT="/work/vita/lanfeng/vlas/wise_dataset_0.4.3"
+DATASET_ROOT="/work/vita/lanfeng/vlas/wise_dataset_0.4.3/merged_train"
 # HF_LEROBOT_HOME must point to the PARENT of merged_train
 # so that LeRobotDataset("merged_train") resolves to $HF_LEROBOT_HOME/merged_train
 export HF_LEROBOT_HOME="${DATASET_ROOT}"
