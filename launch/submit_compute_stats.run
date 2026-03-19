@@ -15,7 +15,7 @@
 ###############################################################################
 export HF_HOME="/work/vita/lanfeng/.cache/huggingface"  # TODO: set your HF_HOME
 CONDA_ROOT="/work/vita/lanfeng/miniconda3"              # TODO: set your conda root
-CONDA_ENV="internvla_a1"
+CONDA_ENV="interval"
 
 source ${CONDA_ROOT}/etc/profile.d/conda.sh
 conda activate ${CONDA_ENV}
@@ -30,6 +30,9 @@ export LEROBOT_VIDEO_BACKEND=pyav
 ###############################################################################
 PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"       # TODO: set InternVLA-A1 root
 DATASET_REPO_ID="merged_train"
+# HF_LEROBOT_HOME must point to the PARENT of the dataset dir
+# so that LeRobotDataset("merged_train") resolves to $HF_LEROBOT_HOME/merged_train
+export HF_LEROBOT_HOME="/work/vita/lanfeng/vlas/wise_dataset_0.4.3"
 ACTION_MODE="delta"
 CHUNK_SIZE=20
 
