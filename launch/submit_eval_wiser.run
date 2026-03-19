@@ -1,0 +1,67 @@
+#!/bin/bash
+#SBATCH --job-name=a1_eval
+#SBATCH --output=/home/lfeng/task_logs/%j.log
+#SBATCH --partition=h100
+#SBATCH --qos=vita
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-node=1
+#SBATCH --nodes=1
+#SBATCH --time=04:00:00
+#SBATCH --mem=64G
+
+###############################################################################
+# Environment
+###############################################################################
+export HF_HOME="/work/vita/lanfeng/.cache/huggingface"
+CONDA_ROOT="/work/vita/lanfeng/miniconda3"
+CONDA_ENV="interval"
+
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate ${CONDA_ENV}
+
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export LEROBOT_VIDEO_BACKEND=pyav
+
+###############################################################################
+# Paths — edit these for your run
+###############################################################################
+PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"
+
+# Path to the checkpoint to evaluate (the pretrained_model dir inside a checkpoint)
+CKPT_PATH="${PROJ_ROOT}/outputs/train/latest/checkpoints/last-checkpoint/pretrained_model"
+
+# Where to save evaluation results
+RESULT_DIR="/work/vita/lanfeng/vlas/exp_results/a1_eval_$(date +'%Y%m%d_%H%M%S')"
+
+# Evaluation settings
+CFG_NAME="config_0"
+SPLIT="both"           # "train", "test", or "both"
+NUM_ENVS=12
+ACTION_MODE="delta"
+DTYPE="bfloat16"
+EVAL_ROUNDS=1
+N_ACTION_STEPS=20      # Replanning frequency (should match training)
+
+cd ${PROJ_ROOT}
+
+###############################################################################
+# Run evaluation
+###############################################################################
+echo "Evaluating checkpoint: ${CKPT_PATH}"
+echo "Results will be saved to: ${RESULT_DIR}"
+
+srun python evaluation/wiser/inference.py \
+    --ckpt_path="${CKPT_PATH}" \
+    --cfg_name="${CFG_NAME}" \
+    --split="${SPLIT}" \
+    --num_envs=${NUM_ENVS} \
+    --action_mode="${ACTION_MODE}" \
+    --dtype="${DTYPE}" \
+    --eval_rounds=${EVAL_ROUNDS} \
+    --n_action_steps=${N_ACTION_STEPS} \
+    --result_dir="${RESULT_DIR}"
+
+echo "Done. Results in ${RESULT_DIR}"
