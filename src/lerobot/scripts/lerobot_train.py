@@ -156,13 +156,18 @@ def _inline_eval(
     from lerobot.policies.InternVLA_A1_3B.transform_internvla_a1 import Qwen3_VLProcessorTransformFn
     from lerobot.utils.constants import OBS_IMAGES
 
-    from vla_align.env.config import get_env_cfg, MAX_EPISODE_STEP_WORKSPACE_EVAL
-    from vla_align.utils.env import build_endless_env
-    from vla_align.utils.rollout import rollout
-    from vla_align.utils.lerobot import (
+    # Patch sys.modules BEFORE importing vla_align.utils.rollout,
+    # which transitively imports vla_align.utils.lerobot (depends on official lerobot).
+    from lerobot.utils.vla_compat import (
+        patch_vla_align_lerobot,
         obs_state_key, image_1_key, image_1_robot_state,
         image_1_segmentation_mask_key, wrist_image_key, task_key,
     )
+    patch_vla_align_lerobot()
+
+    from vla_align.env.config import get_env_cfg, MAX_EPISODE_STEP_WORKSPACE_EVAL
+    from vla_align.utils.env import build_endless_env
+    from vla_align.utils.rollout import rollout
     from vla_align.utils.helpers import batch_tensor_to_string
 
     logging.info(f"\n{'=' * 80}")
