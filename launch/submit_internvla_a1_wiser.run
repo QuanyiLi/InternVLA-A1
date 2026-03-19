@@ -108,7 +108,7 @@ srun torchrun \
     --seed=42 \
     --batch_size=8 \
     --steps=60000 \
-    --eval_freq=20000 \
+    --eval_freq=0 \
     --save_freq=20000 \
     --log_freq=200 \
     --keep_last_checkpoint_only=true \
