@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from pathlib import Path
+import shutil
+import logging
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -59,6 +61,22 @@ def update_last_checkpoint(checkpoint_dir: Path) -> Path:
         last_checkpoint_dir.unlink()
     relative_target = checkpoint_dir.relative_to(checkpoint_dir.parent)
     last_checkpoint_dir.symlink_to(relative_target)
+
+
+def delete_old_checkpoints(output_dir: Path, keep: Path) -> None:
+    """Delete all checkpoint directories except ``keep``.
+
+    Args:
+        output_dir: The training output directory (parent of ``checkpoints/``).
+        keep: The checkpoint directory to keep.
+    """
+    ckpt_parent = output_dir / CHECKPOINTS_DIR
+    if not ckpt_parent.is_dir():
+        return
+    for d in sorted(ckpt_parent.iterdir()):
+        if d.is_dir() and d.resolve() != keep.resolve() and d.name != LAST_CHECKPOINT_LINK:
+            logging.info(f"Deleting old checkpoint: {d}")
+            shutil.rmtree(d)
 
 
 def save_checkpoint(

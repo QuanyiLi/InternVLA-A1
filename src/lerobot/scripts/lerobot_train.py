@@ -39,6 +39,7 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker, format_time
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
+    delete_old_checkpoints,
     get_step_checkpoint_dir,
     get_step_identifier,
     load_training_state,
@@ -125,6 +126,237 @@ def update_policy(
     train_metrics.lr = optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
     return train_metrics, output_dict
+
+
+def _inline_eval(
+    policy,
+    data_stats,
+    accelerator,
+    step,
+    action_mode="delta",
+    wandb_logger=None,
+):
+    """Run config_0 train/test evaluation using the in-memory policy on the master process.
+    
+    Imports vla_align lazily so the training script works even without vla_align installed.
+    """
+    if not accelerator.is_main_process:
+        return
+
+    try:
+        from collections import deque
+        import numpy as np
+        from lerobot.datasets.utils import load_json
+        from lerobot.transforms.core import (
+            NormalizeTransformFn,
+            ResizeImagesWithPadFn,
+            UnNormalizeTransformFn,
+            RemapImageKeyTransformFn,
+            compose,
+        )
+        from lerobot.policies.InternVLA_A1_3B.transform_internvla_a1 import Qwen3_VLProcessorTransformFn
+        from lerobot.utils.constants import OBS_IMAGES
+
+        from vla_align.env.config import get_env_cfg, MAX_EPISODE_STEP_WORKSPACE_EVAL
+        from vla_align.utils.env import build_endless_env
+        from vla_align.utils.rollout import rollout
+        from vla_align.utils.lerobot import (
+            obs_state_key, image_1_key, image_1_robot_state,
+            image_1_segmentation_mask_key, wrist_image_key, task_key,
+        )
+        from vla_align.utils.helpers import batch_tensor_to_string
+    except ImportError as e:
+        logging.warning(f"Inline eval skipped — missing dependency: {e}")
+        return
+
+    logging.info(f"\n{'=' * 80}")
+    logging.info(f"[inline eval] Starting config_0 evaluation at step {step}")
+    logging.info(f"{'=' * 80}")
+
+    # Unwrap the DDP model
+    unwrapped_policy = accelerator.unwrap_model(policy, keep_fp32_wrapper=True)
+    unwrapped_policy.eval()
+
+    # Build input/output transforms from data_stats
+    resize_size = 224
+    stats_key = None
+    if data_stats:
+        # Find the stats key (robot type key)
+        for key in data_stats:
+            if isinstance(data_stats[key], dict) and "observation.state" in data_stats[key]:
+                stats_key = key
+                break
+        if stats_key is None:
+            # Flat structure: data_stats itself contains the feature stats
+            stats = data_stats
+        else:
+            stats = data_stats[stats_key]
+    else:
+        logging.warning("[inline eval] No data_stats available, skipping eval.")
+        unwrapped_policy.train()
+        return
+
+    stat_keys = ["min", "max", "mean", "std"]
+    state_stat = {"observation.state": {k: np.asarray(stats["observation.state"][k]) for k in stat_keys}}
+    action_stat = {"action": {k: np.asarray(stats["action"][k]) for k in stat_keys}}
+
+    unnormalize_fn = UnNormalizeTransformFn(
+        selected_keys=["action"],
+        mode="mean_std",
+        norm_stats=action_stat,
+    )
+
+    image_keys = [f"{OBS_IMAGES}.image{i}" for i in range(3)]
+    input_transforms = compose(
+        [
+            ResizeImagesWithPadFn(height=resize_size, width=resize_size),
+            RemapImageKeyTransformFn(mapping={k: k for k in image_keys}),
+            Qwen3_VLProcessorTransformFn(),
+            NormalizeTransformFn(selected_keys=["observation.state"], norm_stats=state_stat),
+        ]
+    )
+
+    dtype = torch.bfloat16
+    action_dim = 8  # 7 joints + 1 gripper
+    n_action_steps = getattr(unwrapped_policy.config, 'n_action_steps', 20)
+
+    # Action queues for replanning every n_action_steps
+    _action_queues = None  # lazily initialized per num_envs
+
+    def _a1_policy_forward(obs):
+        """Wraps InternVLA-A1 policy for the vla_align rollout interface.
+        
+        Interface: (obs_dict) -> (action_to_take, expert_action, info_dict)
+        Replans every n_action_steps by caching action chunks in per-env queues.
+        """
+        nonlocal _action_queues
+        import time as _time
+        start = _time.perf_counter()
+
+        num_envs = obs[obs_state_key].shape[0]
+        if _action_queues is None:
+            _action_queues = [deque() for _ in range(num_envs)]
+
+        all_actions = torch.zeros((num_envs, action_dim), device=obs[obs_state_key].device)
+
+        for env_idx in range(num_envs):
+            # If we have cached actions, use them
+            if len(_action_queues[env_idx]) > 0:
+                all_actions[env_idx] = _action_queues[env_idx].popleft()
+                continue
+
+            # Otherwise, run inference to get a new action chunk
+            state = obs[obs_state_key][env_idx][:8].float()  # Slice to 8 dims
+            img1 = obs[image_1_key][env_idx].float() / 255.0  # (H, W, 3)
+            img1 = img1.permute(2, 0, 1)  # (3, H, W)
+            wrist_img = obs[wrist_image_key][env_idx].float() / 255.0
+            wrist_img = wrist_img.permute(2, 0, 1)
+            task_str = batch_tensor_to_string(obs[task_key][env_idx:env_idx+1])[0]
+
+            # Stack current image as 2-frame history (no actual history tracking for simplicity)
+            image0 = torch.stack([img1, img1], dim=0).to(dtype).cuda()
+            image1 = torch.stack([wrist_img, wrist_img], dim=0).to(dtype).cuda()
+
+            sample = {
+                f"{OBS_IMAGES}.image0": image0,
+                f"{OBS_IMAGES}.image1": image1,
+                "observation.state": state.cuda(),
+                "task": task_str,
+            }
+
+            sample = input_transforms(sample)
+
+            inputs = {}
+            for key in sample.keys():
+                if key == "task":
+                    inputs[key] = [sample[key]]
+                elif isinstance(sample[key], torch.Tensor) and sample[key].dtype == torch.int64:
+                    inputs[key] = sample[key][None].cuda()
+                elif isinstance(sample[key], torch.Tensor):
+                    inputs[key] = sample[key][None].cuda().to(dtype=dtype)
+                else:
+                    inputs[key] = sample[key]
+
+            inputs.update({
+                f"{OBS_IMAGES}.image0_mask": torch.tensor([True]).cuda(),
+                f"{OBS_IMAGES}.image1_mask": torch.tensor([True]).cuda(),
+                f"{OBS_IMAGES}.image2_mask": torch.tensor([False]).cuda(),
+            })
+
+            with torch.no_grad():
+                action_pred, _ = unwrapped_policy.predict_action_chunk(inputs)
+
+            # Get the full action chunk: (1, chunk_size, max_action_dim) -> (n_action_steps, action_dim)
+            action_chunk = action_pred[0, :n_action_steps, :action_dim]
+            action_chunk = unnormalize_fn({"action": action_chunk})["action"]
+
+            if action_mode == "delta":
+                init_state = obs[obs_state_key][env_idx][:action_dim].float().cuda()
+                gripper_idx = action_dim - 1
+                init_state[gripper_idx] = 0.0
+                action_chunk = action_chunk + init_state[None, :]
+
+            # First action goes to output, rest go to queue
+            all_actions[env_idx] = action_chunk[0].float()
+            for t in range(1, action_chunk.shape[0]):
+                _action_queues[env_idx].append(action_chunk[t].float().to(obs[obs_state_key].device))
+
+        elapsed = _time.perf_counter() - start
+        return all_actions, all_actions, {"inference_time": elapsed}
+
+    num_envs = 12
+    max_steps = MAX_EPISODE_STEP_WORKSPACE_EVAL
+
+    eval_results = {}
+    for split in ["train", "test"]:
+        # Reset action queues between splits
+        _action_queues = None
+        scene_cfg = dict(
+            robot_init_qpos_noise=0.0,
+            cube_size_noise=0.0,
+            cfg_name="config_0",
+            mode=split,
+        )
+        env_cfg = get_env_cfg(
+            num_env=num_envs,
+            max_steps=max_steps,
+            obs_mode="rgb+segmentation",
+            scene_cfg_to_overwrite=scene_cfg,
+        )
+        envs = build_endless_env(env_cfg, record_video=False, data_record_dir=None)
+
+        eval_start = time.perf_counter()
+        with torch.no_grad():
+            performance = rollout(
+                envs,
+                _a1_policy_forward,
+                round_to_collect=1,
+                demo_saving_dir=None,
+                debug_mode=False,
+                indices_to_save=[],
+            )
+        elapsed = time.perf_counter() - eval_start
+
+        logging.info(f"\n{'=' * 80}")
+        logging.info(f"[inline eval] Step {step} | config_0 ({split}) — {elapsed:.1f}s")
+        logging.info(f"{'=' * 80}")
+        for key, v in performance.items():
+            logging.info(f"  {key}: {v}")
+
+        eval_results[f"eval/{split}"] = performance
+        envs.unwrapped.close()
+
+    # Log to wandb
+    if wandb_logger:
+        flat_results = {}
+        for split_key, perf in eval_results.items():
+            for k, v in perf.items():
+                flat_results[f"{split_key}/{k}"] = v
+        wandb_logger.log_dict(flat_results, step)
+
+    # Restore training mode
+    unwrapped_policy.train()
+    logging.info(f"[inline eval] Evaluation complete at step {step}\n")
 
 
 @parser.wrap()
@@ -323,6 +555,18 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
         training_start_time = time.perf_counter()
+
+    # Step-0 eval (sanity check) — before any training
+    if cfg.eval_freq > 0:
+        _inline_eval(
+            policy=policy,
+            data_stats=data_stats,
+            accelerator=accelerator,
+            step=0,
+            action_mode=getattr(cfg.dataset, 'action_mode', 'delta'),
+            wandb_logger=wandb_logger,
+        )
+        accelerator.wait_for_everyone()
     
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
@@ -381,11 +625,25 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     scheduler=lr_scheduler,
                     data_stats=data_stats, 
                 )
+                if cfg.keep_last_checkpoint_only:
+                    delete_old_checkpoints(cfg.output_dir, keep=checkpoint_dir)
                 update_last_checkpoint(checkpoint_dir)
                 if wandb_logger:
                     wandb_logger.log_policy(checkpoint_dir)
 
             accelerator.wait_for_everyone()
+
+            # Inline eval after checkpoint save
+            if cfg.eval_freq > 0 and step % cfg.eval_freq == 0:
+                _inline_eval(
+                    policy=policy,
+                    data_stats=data_stats,
+                    accelerator=accelerator,
+                    step=step,
+                    action_mode=getattr(cfg.dataset, 'action_mode', 'delta'),
+                    wandb_logger=wandb_logger,
+                )
+                accelerator.wait_for_everyone()
 
     if is_main_process:
         logging.info("End of training")

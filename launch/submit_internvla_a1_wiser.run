@@ -1,0 +1,117 @@
+#!/bin/bash
+#SBATCH --job-name=a1_wiser
+#SBATCH --output=/home/lfeng/task_logs/%j.log
+#SBATCH --partition=h100
+#SBATCH --qos=vita
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=64
+#SBATCH --gpus-per-node=4
+#SBATCH --nodes=3
+#SBATCH --time=24:00:00
+#SBATCH --mem=200G
+
+###############################################################################
+# Environment — fill in your paths
+###############################################################################
+export HF_HOME="/work/vita/lanfeng/.cache/huggingface"  # TODO: set your HF_HOME
+WANDB_TOKEN="YOUR_WANDB_TOKEN"                          # TODO: set your wandb token
+CONDA_ROOT="/work/vita/lanfeng/miniconda3"              # TODO: set your conda root
+CONDA_ENV="internvla_a1"
+CUDA_HOME="/usr/local/cuda-12.8"                        # TODO: verify cuda path
+
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate ${CONDA_ENV}
+wandb login ${WANDB_TOKEN}
+
+export CUDA_HOME="${CUDA_HOME}"
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+
+###############################################################################
+# Distributed setup
+###############################################################################
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=29500
+
+NNODES=3
+NPROC_PER_NODE=4
+NUM_PROCESSES=$((NNODES * NPROC_PER_NODE))
+
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export WANDB_MODE=offline
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export LEROBOT_VIDEO_BACKEND=pyav
+
+###############################################################################
+# Paths
+###############################################################################
+PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"       # TODO: set InternVLA-A1 root
+DATASET_ROOT="/work/vita/lanfeng/vlas/wise_dataset_0.4.3"
+DATASET_REPO_ID="merged_train"
+ACTION_TYPE="delta"
+USE_EXTERNAL_STATS="true"
+
+POLICY="qwena1"
+PRETRAINED_PATH="InternRobotics/InternVLA-A1-3B"
+JOB_NAME="$(date +'%Y_%m_%d_%H_%M_%S')-${POLICY}-wiser-${ACTION_TYPE}-finetune"
+OUTPUT_DIR="/work/vita/lanfeng/vlas/exp_results/${JOB_NAME}"
+
+cd ${PROJ_ROOT}
+
+###############################################################################
+# Launch training
+###############################################################################
+srun torchrun \
+    --nnodes=${NNODES} \
+    --nproc_per_node=${NPROC_PER_NODE} \
+    --rdzv_id=$SLURM_JOB_ID \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+    src/lerobot/scripts/lerobot_train.py \
+    \
+    --output_dir="${OUTPUT_DIR}" \
+    --num_workers=12 \
+    --job_name="${JOB_NAME}" \
+    \
+    --policy.type=${POLICY} \
+    --policy.repo_id=lerobot_lab/${POLICY} \
+    --policy.pretrained_path=${PRETRAINED_PATH} \
+    --policy.push_to_hub=false \
+    --policy.gradient_checkpointing=false \
+    --policy.dtype=bfloat16 \
+    --policy.optimizer_lr=5.0e-5 \
+    --policy.scheduler_warmup_steps=2000 \
+    --policy.scheduler_decay_steps=60000 \
+    --policy.scheduler_decay_lr=5.0e-6 \
+    --policy.freeze_vision_encoder=false \
+    --policy.train_expert_only=false \
+    --policy.train_vlm_only=false \
+    --policy.qwen3_vl_variant=qwen3_vl_28l \
+    --policy.action_expert_variant=qwen3_28l \
+    \
+    --dataset.type=${POLICY} \
+    --dataset.repo_id="${DATASET_REPO_ID}" \
+    --dataset.root="${DATASET_ROOT}" \
+    --dataset.action_mode="${ACTION_TYPE}" \
+    --dataset.use_external_stats=${USE_EXTERNAL_STATS} \
+    --dataset.external_stats_path=${HF_HOME}/lerobot/stats/${ACTION_TYPE}/${DATASET_REPO_ID}/stats.json \
+    --dataset.slice_state_dim=8 \
+    \
+    --policy.chunk_size=20 \
+    --policy.n_action_steps=20 \
+    \
+    --seed=42 \
+    --batch_size=8 \
+    --steps=60000 \
+    --eval_freq=20000 \
+    --save_freq=20000 \
+    --log_freq=200 \
+    --keep_last_checkpoint_only=true \
+    \
+    --wandb.enable=true \
+    --wandb.project=internvla_a1_wiser \
+    --wandb.mode=offline

@@ -22,6 +22,7 @@ MASK_MAPPING = {
     # others
     "aloha": make_bool_mask(6, -1, 6, -1), 
     "panda": make_bool_mask(7, ), 
+    "my_panda_wristcam": make_bool_mask(7, -1), 
 }
 
 
@@ -261,4 +262,12 @@ IMAGE_MAPPING["ARX AC One"] = {
     "images.rgb.head": f"{OBS_IMAGES}.image0", 
     "images.rgb.hand_left": f"{OBS_IMAGES}.image1", 
     "images.rgb.hand_right": f"{OBS_IMAGES}.image2", 
+}
+FEATURE_MAPPING["my_panda_wristcam"] = {
+    OBS_STATE: ["observation.state"],
+    ACTION: ["action"],
+}
+IMAGE_MAPPING["my_panda_wristcam"] = {
+    "observation.images.image_1": f"{OBS_IMAGES}.image0",
+    "observation.images.wrist_image": f"{OBS_IMAGES}.image1",
 }

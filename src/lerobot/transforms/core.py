@@ -82,6 +82,23 @@ class IdentityTransformFn(DataTransformFn):
         return data
     
 
+@DataTransformFn.register_subclass("slice_state")
+@dataclass
+class SliceStateTransformFn(DataTransformFn):
+    """Truncate observation.state to the first `state_dim` elements.
+
+    Useful when the raw state has more dimensions than the action space
+    (e.g. duplicated gripper fingers on a Panda robot).
+    """
+    state_dim: int = 8
+
+    def __call__(self, data: DataDict) -> DataDict:
+        for key in [OBS_STATE, "observation.state"]:
+            if key in data:
+                data[key] = data[key][..., :self.state_dim]
+        return data
+
+
 @DataTransformFn.register_subclass("pad_state_and_action")
 @dataclass
 class PadStateAndActionTransformFn(DataTransformFn):
@@ -97,6 +114,7 @@ class PadStateAndActionTransformFn(DataTransformFn):
         if vector.shape[-1] >= new_dim:
             return vector
         return F.pad(vector, (0, new_dim - vector.shape[-1]))
+
 
 
 @DataTransformFn.register_subclass("totensor")

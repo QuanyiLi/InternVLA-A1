@@ -1,0 +1,50 @@
+#!/bin/bash
+#SBATCH --job-name=a1_stats
+#SBATCH --output=/home/lfeng/task_logs/%j.log
+#SBATCH --partition=h100
+#SBATCH --qos=vita
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-node=1
+#SBATCH --nodes=1
+#SBATCH --time=02:00:00
+#SBATCH --mem=64G
+
+###############################################################################
+# Environment — fill in your paths
+###############################################################################
+export HF_HOME="/work/vita/lanfeng/.cache/huggingface"  # TODO: set your HF_HOME
+CONDA_ROOT="/work/vita/lanfeng/miniconda3"              # TODO: set your conda root
+CONDA_ENV="internvla_a1"
+
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate ${CONDA_ENV}
+
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export LEROBOT_VIDEO_BACKEND=pyav
+
+###############################################################################
+# Paths
+###############################################################################
+PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"       # TODO: set InternVLA-A1 root
+DATASET_REPO_ID="merged_train"
+ACTION_MODE="delta"
+CHUNK_SIZE=20
+
+cd ${PROJ_ROOT}
+
+###############################################################################
+# Compute normalization statistics
+###############################################################################
+echo "Computing ${ACTION_MODE} normalization stats with chunk_size=${CHUNK_SIZE}..."
+echo "Stats will be saved to: ${HF_HOME}/lerobot/stats/${ACTION_MODE}/${DATASET_REPO_ID}/stats.json"
+
+srun python util_scripts/compute_norm_stats_single.py \
+    --action_mode ${ACTION_MODE} \
+    --chunk_size ${CHUNK_SIZE} \
+    --repo_id ${DATASET_REPO_ID} \
+    --output_dir ${HF_HOME}/lerobot/stats
+
+echo "Done!"

@@ -25,6 +25,7 @@ from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.utils.constants import OBS_IMAGES
 from lerobot.transforms.core import *
 from lerobot.policies.InternVLA_A1_3B.transform_internvla_a1 import Qwen3_VLProcessorTransformFn, UnifyQwenA1InputsTransformFn
+from typing import Optional
 
 
 @DatasetConfig.register_subclass("qwena1")
@@ -34,6 +35,7 @@ class QwenA1DatasetConfig(DatasetConfig):
     width: int = 224
     max_state_dim: int = 32
     max_action_dim: int = 32
+    slice_state_dim: Optional[int] = None  # If set, truncate state to this dim before delta action
 
     data_transforms: TransformGroup = field(
         default_factory=lambda: TransformGroup(
@@ -60,9 +62,17 @@ class QwenA1DatasetConfig(DatasetConfig):
     def __post_init__(self):
         super().__post_init__()
         inputs = list(self.data_transforms.inputs)
+
+        # Optionally prepend state slicing (e.g. 9-dim Panda state → 8-dim)
+        has_slice = any(isinstance(t, SliceStateTransformFn) for t in inputs)
+        if self.slice_state_dim is not None and not has_slice:
+            inputs = [SliceStateTransformFn(state_dim=self.slice_state_dim), *inputs]
+            self.data_transforms = replace(self.data_transforms, inputs=inputs)
+
         has_delta = any(isinstance(t, DeltaActionTransformFn) for t in inputs)
         if self.action_mode == "delta":
             if not has_delta:  # add DeltaActionTransformFn
+                inputs = list(self.data_transforms.inputs)
                 inputs = [DeltaActionTransformFn(), *inputs]
                 self.data_transforms = replace(self.data_transforms, inputs=inputs)
         else:  # self.action_mode == "abs"
