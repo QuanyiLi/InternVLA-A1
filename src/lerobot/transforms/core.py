@@ -275,14 +275,15 @@ class NormalizeTransformFn(DataTransformFn):
 
             x = data[key]
             stats = self.norm_stats[key]
+            dim = x.shape[-1]
 
             if self.mode == "mean_std":
-                mean = torch.from_numpy(stats["mean"]).to(x)
-                std = torch.from_numpy(stats["std"]).to(x)
+                mean = torch.from_numpy(stats["mean"]).to(x)[..., :dim]
+                std = torch.from_numpy(stats["std"]).to(x)[..., :dim]
                 x = ((x - mean) / (std + eps))
             elif self.mode == "min_max":
-                min_v = torch.from_numpy(stats["min"]).to(x)
-                max_v = torch.from_numpy(stats["max"]).to(x)
+                min_v = torch.from_numpy(stats["min"]).to(x)[..., :dim]
+                max_v = torch.from_numpy(stats["max"]).to(x)[..., :dim]
                 x = (x - min_v) / (max_v - min_v + eps)
             else:
                 raise ValueError(f"Unknown normalization mode: {self.mode}")
