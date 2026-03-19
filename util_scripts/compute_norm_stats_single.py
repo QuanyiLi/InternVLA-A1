@@ -155,9 +155,17 @@ def compute_norm_stats(cfg):
             state = [torch.stack(curr_episode[key][:]) for key in mapping[OBS_STATE]]
             state = [s if s.ndim > 1 else s[:, None] for s in state]
             state = torch.cat(state, dim=-1)
+            action_dim = action.shape[-1]
+            # Truncate state and mask to action dim if state has extra dims
+            # (e.g., 9-dim state with duplicated gripper vs 8-dim action)
+            if state.shape[-1] > action_dim:
+                state = state[:, :action_dim]
+                delta_mask = mask[:action_dim]
+            else:
+                delta_mask = mask
             truncated_state = state[0:(ep_len - chunk_size + 1)]
             action_chunk = action.unfold(dimension=0, size=chunk_size, step=1).permute(0, 2, 1)
-            delta_action = action_chunk - torch.where(mask, truncated_state, 0)[:, None]
+            delta_action = action_chunk - torch.where(delta_mask, truncated_state, 0)[:, None]
             sid, eid = 0, 0
             for action_key in mapping[ACTION]:
                 eid += dataset.meta.features[action_key]['shape'][0]
