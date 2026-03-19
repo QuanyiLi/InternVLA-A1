@@ -22,6 +22,7 @@ from typing import TypedDict, TypeVar
 
 import packaging
 import safetensors
+import torch.distributed as dist
 from huggingface_hub import HfApi, ModelCard, ModelCardData, hf_hub_download
 from huggingface_hub.constants import SAFETENSORS_SINGLE_FILE
 from huggingface_hub.errors import HfHubHTTPError
@@ -35,6 +36,17 @@ from lerobot.policies.utils import log_model_loading_keys
 from lerobot.utils.hub import HubMixin
 
 T = TypeVar("T", bound="PreTrainedPolicy")
+
+
+def _is_main_process() -> bool:
+    """Return True if this is rank 0 or distributed is not initialized."""
+    return not dist.is_initialized() or dist.get_rank() == 0
+
+
+def _barrier():
+    """Synchronize all processes if distributed is initialized."""
+    if dist.is_initialized():
+        dist.barrier()
 
 
 class ActionSelectKwargs(TypedDict, total=False):
@@ -111,17 +123,30 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
             policy = cls._load_as_safetensor(instance, model_file, config.device, strict)
         else:
             try:
-                model_file = hf_hub_download(
-                    repo_id=model_id,
-                    filename=SAFETENSORS_SINGLE_FILE,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    proxies=proxies,
-                    resume_download=resume_download,
-                    token=token,
-                    local_files_only=local_files_only,
-                )
+                # Only rank 0 downloads; other ranks wait then load from cache
+                if _is_main_process():
+                    logging.info(f"Rank 0: downloading {model_id}...")
+                    model_file = hf_hub_download(
+                        repo_id=model_id,
+                        filename=SAFETENSORS_SINGLE_FILE,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        proxies=proxies,
+                        resume_download=resume_download,
+                        token=token,
+                        local_files_only=local_files_only,
+                    )
+                _barrier()
+                if not _is_main_process():
+                    logging.info(f"Rank {dist.get_rank()}: loading {model_id} from cache...")
+                    model_file = hf_hub_download(
+                        repo_id=model_id,
+                        filename=SAFETENSORS_SINGLE_FILE,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        local_files_only=True,
+                    )
                 policy = cls._load_as_safetensor(instance, model_file, config.device, strict)
             except HfHubHTTPError as e:
                 raise FileNotFoundError(

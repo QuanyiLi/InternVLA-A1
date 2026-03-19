@@ -460,8 +460,13 @@ class QwenA1(nn.Module):
 
         if not os.path.exists(f"{HF_HOME}/hub/Cosmos-Tokenizer-CI8x8/encoder.jit"):
             logging.warning(f"Cosmos-Tokenizer-CI8x8 not found, downloading...")
+            import torch.distributed as dist
             from huggingface_hub import snapshot_download
-            snapshot_download(repo_id="nvidia/Cosmos-Tokenizer-CI8x8", local_dir=f"{HF_HOME}/hub/Cosmos-Tokenizer-CI8x8")
+            is_main = not dist.is_initialized() or dist.get_rank() == 0
+            if is_main:
+                snapshot_download(repo_id="nvidia/Cosmos-Tokenizer-CI8x8", local_dir=f"{HF_HOME}/hub/Cosmos-Tokenizer-CI8x8")
+            if dist.is_initialized():
+                dist.barrier()
 
         self.cosmos = ImageTokenizer(
             checkpoint_enc=f"{HF_HOME}/hub/Cosmos-Tokenizer-CI8x8/encoder.jit", 
