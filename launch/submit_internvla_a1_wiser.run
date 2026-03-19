@@ -16,11 +16,9 @@
 export HF_HOME="/work/vita/lanfeng/.cache/huggingface"  # TODO: set your HF_HOME
 WANDB_TOKEN="YOUR_WANDB_TOKEN"                          # TODO: set your wandb token
 CONDA_ROOT="/work/vita/lanfeng/miniconda3"              # TODO: set your conda root
-CONDA_ENV="interval"
+CONDA_ENV="internvla"
 CUDA_HOME="/usr/local/cuda-12.8"                        # TODO: verify cuda path
 
-source ${CONDA_ROOT}/etc/profile.d/conda.sh
-conda activate ${CONDA_ENV}
 
 export CUDA_HOME="${CUDA_HOME}"
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
