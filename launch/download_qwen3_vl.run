@@ -21,18 +21,30 @@ source ${CONDA_ROOT}/etc/profile.d/conda.sh
 conda activate ${CONDA_ENV}
 
 ###############################################################################
-# Download Qwen3-VL-2B-Instruct model and processor
+# Download all required models
 ###############################################################################
 python -c "
 from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
+from huggingface_hub import snapshot_download
+import os
 
+HF_HOME = os.environ['HF_HOME']
+
+# 1) Qwen3-VL-2B-Instruct processor
 print('Downloading Qwen3-VL-2B-Instruct processor...')
 Qwen3VLProcessor.from_pretrained('Qwen/Qwen3-VL-2B-Instruct')
 print('Processor cached.')
 
+# 2) Qwen3-VL-2B-Instruct model weights
 print('Downloading Qwen3-VL-2B-Instruct model...')
 Qwen3VLForConditionalGeneration.from_pretrained('Qwen/Qwen3-VL-2B-Instruct')
 print('Model cached.')
 
-print('Done! Both model and processor are cached to ${HF_HOME}')
+# 3) Cosmos-Tokenizer-CI8x8 (used by QwenA1 model init)
+cosmos_dir = f'{HF_HOME}/hub/Cosmos-Tokenizer-CI8x8'
+print(f'Downloading Cosmos-Tokenizer-CI8x8 to {cosmos_dir}...')
+snapshot_download(repo_id='nvidia/Cosmos-Tokenizer-CI8x8', local_dir=cosmos_dir)
+print('Cosmos tokenizer cached.')
+
+print('Done! All models are cached.')
 "
