@@ -207,7 +207,7 @@ def _inline_eval(
         norm_stats=action_stat,
     )
 
-    image_keys = [f"{OBS_IMAGES}.image{i}" for i in range(3)]
+    image_keys = [f"{OBS_IMAGES}.image{i}" for i in range(2)]  # only 2 cameras from env
     input_transforms = compose(
         [
             ResizeImagesWithPadFn(height=resize_size, width=resize_size),
