@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH --job-name=dl_qwen3
+#SBATCH --output=/home/lfeng/task_logs/%j_download.log
+#SBATCH --partition=h100
+#SBATCH --qos=vita
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=0
+#SBATCH --nodes=1
+#SBATCH --time=01:00:00
+#SBATCH --mem=32G
+
+###############################################################################
+# Environment
+###############################################################################
+export HF_HOME="/work/vita/lanfeng/.cache/huggingface"
+CONDA_ROOT="/work/vita/lanfeng/miniconda3"
+CONDA_ENV="internvla"
+
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate ${CONDA_ENV}
+
+###############################################################################
+# Download Qwen3-VL-2B-Instruct model and processor
+###############################################################################
+python -c "
+from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
+
+print('Downloading Qwen3-VL-2B-Instruct processor...')
+Qwen3VLProcessor.from_pretrained('Qwen/Qwen3-VL-2B-Instruct')
+print('Processor cached.')
+
+print('Downloading Qwen3-VL-2B-Instruct model...')
+Qwen3VLForConditionalGeneration.from_pretrained('Qwen/Qwen3-VL-2B-Instruct')
+print('Model cached.')
+
+print('Done! Both model and processor are cached to ${HF_HOME}')
+"
