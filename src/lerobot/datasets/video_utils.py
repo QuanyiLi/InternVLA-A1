@@ -16,6 +16,7 @@
 import glob
 import importlib
 import logging
+import os
 import shutil
 import tempfile
 import warnings
@@ -34,6 +35,9 @@ from PIL import Image
 
 
 def get_safe_default_codec():
+    env_backend = os.environ.get("LEROBOT_VIDEO_BACKEND")
+    if env_backend:
+        return env_backend
     if importlib.util.find_spec("torchcodec"):
         return "torchcodec"
     else:
