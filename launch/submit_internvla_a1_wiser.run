@@ -49,7 +49,7 @@ export LEROBOT_VIDEO_BACKEND=pyav
 # Paths
 ###############################################################################
 PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"       # TODO: set InternVLA-A1 root
-DATASET_ROOT="/work/vita/lanfeng/vlas/wise_dataset_0.4.3/merged_train"
+DATASET_ROOT="/work/vita/lanfeng/vlas/wise_dataset_0.4.3"
 # HF_LEROBOT_HOME must point to the PARENT of merged_train
 # so that LeRobotDataset("merged_train") resolves to $HF_LEROBOT_HOME/merged_train
 export HF_LEROBOT_HOME="${DATASET_ROOT}"
@@ -97,7 +97,6 @@ srun torchrun \
     \
     --dataset.type=${POLICY} \
     --dataset.repo_id="${DATASET_REPO_ID}" \
-    --dataset.root="${DATASET_ROOT}" \
     --dataset.action_mode="${ACTION_TYPE}" \
     --dataset.use_external_stats=${USE_EXTERNAL_STATS} \
     --dataset.external_stats_path=${HF_HOME}/lerobot/stats/${ACTION_TYPE}/${DATASET_REPO_ID}/stats.json \
