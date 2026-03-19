@@ -36,13 +36,17 @@ from lerobot.transforms.core import (
 )
 from lerobot.utils.constants import OBS_IMAGES
 
+# Patch sys.modules before importing vla_align modules that depend on official lerobot
+from lerobot.utils.vla_compat import (
+    patch_vla_align_lerobot,
+    obs_state_key, image_1_key, wrist_image_key, task_key,
+)
+patch_vla_align_lerobot()
+
 # vla_align imports for ManiSkill evaluation
 from vla_align.env.config import get_env_cfg, MAX_EPISODE_STEP_WORKSPACE_EVAL
 from vla_align.utils.env import build_endless_env
 from vla_align.utils.rollout import rollout
-from vla_align.utils.lerobot import (
-    obs_state_key, image_1_key, wrist_image_key, task_key,
-)
 from vla_align.utils.helpers import batch_tensor_to_string
 
 
@@ -80,7 +84,7 @@ def build_policy_and_transforms(ckpt_path, stats_key, resize_size, dtype):
         norm_stats=action_stat,
     )
 
-    image_keys = [f"{OBS_IMAGES}.image{i}" for i in range(3)]
+    image_keys = [f"{OBS_IMAGES}.image{i}" for i in range(2)]  # only 2 cameras from env
     input_transforms = compose(
         [
             ResizeImagesWithPadFn(height=resize_size, width=resize_size),
