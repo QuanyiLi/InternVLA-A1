@@ -20,11 +20,7 @@
 # Environment
 ###############################################################################
 export HF_HOME="/work/vita/lanfeng/.cache/huggingface"
-CONDA_ROOT="/work/vita/lanfeng/miniconda3"
-CONDA_ENV="interval"
 
-source ${CONDA_ROOT}/etc/profile.d/conda.sh
-conda activate ${CONDA_ENV}
 
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1
@@ -38,10 +34,10 @@ PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"
 SCRIPT_PATH="${PROJ_ROOT}/evaluation/wiser/inference.py"
 
 # Path to the checkpoint to evaluate (the pretrained_model dir inside a checkpoint)
-CKPT_PATH="${PROJ_ROOT}/outputs/train/latest/checkpoints/last-checkpoint/pretrained_model"
+CKPT_PATH="/work/vita/lanfeng/vlas/exp_results/2026_03_19_17_45_44-qwena1-wiser-delta-finetune/checkpoints/last/pretrained_model"
 
 # Where to save evaluation results
-RESULT_DIR="/work/vita/lanfeng/vlas/exp_results/a1_eval_$(date +'%Y%m%d_%H%M%S')"
+RESULT_DIR="/work/vita/lanfeng/vlas/internvla_a1_eval_result"
 mkdir -p $RESULT_DIR
 
 # Evaluation settings
