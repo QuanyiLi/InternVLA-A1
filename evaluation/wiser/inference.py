@@ -11,6 +11,7 @@ Usage:
         --num_envs 12
 """
 import json
+import shutil
 import logging
 import os
 import time
@@ -114,10 +115,32 @@ class InferenceArgs:
     log_level: str = "INFO"
     eval_rounds: int = 1
     result_dir: str = ""  # If set, save results to this directory
+    start_subset: int = -1  # If >= 0, loop config_{start_subset..end_subset-1}
+    end_subset: int = -1
+    aggregate_only: bool = False  # If True, only aggregate existing results
 
 
 def run_eval(args: InferenceArgs):
-    """Run evaluation on config_0 train/test splits."""
+    """Run evaluation on WISER/ManiSkill configs.
+
+    Supports three modes:
+    1. aggregate_only: just aggregate existing results.
+    2. start_subset/end_subset >= 0: loop over config_{start..end-1}.
+    3. Otherwise: evaluate a single cfg_name.
+    """
+    # ── Aggregate-only mode ──────────────────────────────────────────────
+    if args.aggregate_only:
+        assert args.result_dir, "--result_dir is required for --aggregate_only"
+        _aggregate_results(args.result_dir)
+        return
+
+    # ── Build config list ────────────────────────────────────────────────
+    if args.start_subset >= 0 and args.end_subset >= 0:
+        cfg_names = [f"config_{i}" for i in range(args.start_subset, args.end_subset)]
+    else:
+        cfg_names = [args.cfg_name]
+
+    # ── Load policy once ─────────────────────────────────────────────────
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
     policy, input_transforms, unnormalize_fn = build_policy_and_transforms(
         args.ckpt_path, args.stats_key, args.resize_size, dtype
@@ -213,52 +236,61 @@ def run_eval(args: InferenceArgs):
     else:
         result_dir = None
 
+    # ── Evaluation loop ──────────────────────────────────────────────────
     for split in splits:
-        # Reset action queues between splits
-        _action_queues = None
-        scene_cfg = dict(
-            robot_init_qpos_noise=0.0,
-            cube_size_noise=0.0,
-            cfg_name=args.cfg_name,
-            mode=split,
-        )
-        env_cfg = get_env_cfg(
-            num_env=args.num_envs,
-            max_steps=args.max_steps,
-            obs_mode="rgb+segmentation",
-            scene_cfg_to_overwrite=scene_cfg,
-        )
-        envs = build_endless_env(env_cfg, record_video=False, data_record_dir=None)
+        for cfg_name in cfg_names:
+            # Skip if already evaluated
+            if result_dir:
+                subset_dir = str(result_dir / f"{cfg_name}_{split}")
+                metrics_file = os.path.join(subset_dir, "episode_metrics.json")
+                if os.path.exists(metrics_file):
+                    print(f"Skipping {cfg_name} ({split}) — already evaluated")
+                    continue
+                if os.path.exists(subset_dir):
+                    shutil.rmtree(subset_dir)
+                os.makedirs(subset_dir)
+            else:
+                subset_dir = None
 
-        # Per-subset result dir (e.g., result_dir/config_0_train/)
-        subset_dir = None
-        if result_dir:
-            subset_dir = str(result_dir / f"{args.cfg_name}_{split}")
-            os.makedirs(subset_dir, exist_ok=True)
-
-        print(f"\n{'=' * 80}")
-        print(f"Starting eval: {args.cfg_name} ({split})")
-        print(f"{'=' * 80}")
-
-        eval_start = time.perf_counter()
-        with torch.no_grad():
-            performance = rollout(
-                envs,
-                _a1_policy_forward,
-                round_to_collect=args.eval_rounds,
-                demo_saving_dir=subset_dir,
-                debug_mode=True if subset_dir else False,
-                indices_to_save=[],
+            # Reset action queues between configs
+            _action_queues = None
+            scene_cfg = dict(
+                robot_init_qpos_noise=0.0,
+                cube_size_noise=0.0,
+                cfg_name=cfg_name,
+                mode=split,
             )
-        elapsed = time.perf_counter() - eval_start
+            env_cfg = get_env_cfg(
+                num_env=args.num_envs,
+                max_steps=args.max_steps,
+                obs_mode="rgb+segmentation",
+                scene_cfg_to_overwrite=scene_cfg,
+            )
+            envs = build_endless_env(env_cfg, record_video=False, data_record_dir=None)
 
-        print(f"\n{'=' * 80}")
-        print(f"{args.cfg_name} ({split}) — {elapsed:.1f}s")
-        print(f"{'=' * 80}")
-        for key, v in performance.items():
-            print(f"  {key}: {v}")
+            print(f"\n{'=' * 80}")
+            print(f"Starting eval: {cfg_name} ({split})")
+            print(f"{'=' * 80}")
 
-        envs.unwrapped.close()
+            eval_start = time.perf_counter()
+            with torch.no_grad():
+                performance = rollout(
+                    envs,
+                    _a1_policy_forward,
+                    round_to_collect=args.eval_rounds,
+                    demo_saving_dir=subset_dir,
+                    debug_mode=True if subset_dir else False,
+                    indices_to_save=[],
+                )
+            elapsed = time.perf_counter() - eval_start
+
+            print(f"\n{'=' * 80}")
+            print(f"{cfg_name} ({split}) — {elapsed:.1f}s")
+            print(f"{'=' * 80}")
+            for key, v in performance.items():
+                print(f"  {key}: {v}")
+
+            envs.unwrapped.close()
 
     # Aggregate results into final_results_train.json / final_results_test.json
     if result_dir:

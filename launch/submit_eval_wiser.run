@@ -3,12 +3,18 @@
 #SBATCH --output=/home/lfeng/task_logs/%j.log
 #SBATCH --partition=h100
 #SBATCH --qos=vita
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks=12
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --gpus-per-node=1
-#SBATCH --nodes=1
-#SBATCH --time=04:00:00
-#SBATCH --mem=64G
+#SBATCH --gpus-per-node=4
+#SBATCH --nodes=3
+#SBATCH --time=12:00:00
+#SBATCH --mem=200G
+
+# ============================================================
+# Evaluate InternVLA-A1 on all 24 subsets (train+test)
+# using 3 H100 nodes × 4 GPUs = 12 tasks, 2 configs each.
+# ============================================================
 
 ###############################################################################
 # Environment
@@ -29,39 +35,55 @@ export LEROBOT_VIDEO_BACKEND=pyav
 # Paths — edit these for your run
 ###############################################################################
 PROJ_ROOT="/work/vita/lanfeng/vlas/InternVLA-A1"
+SCRIPT_PATH="${PROJ_ROOT}/evaluation/wiser/inference.py"
 
 # Path to the checkpoint to evaluate (the pretrained_model dir inside a checkpoint)
 CKPT_PATH="${PROJ_ROOT}/outputs/train/latest/checkpoints/last-checkpoint/pretrained_model"
 
 # Where to save evaluation results
 RESULT_DIR="/work/vita/lanfeng/vlas/exp_results/a1_eval_$(date +'%Y%m%d_%H%M%S')"
+mkdir -p $RESULT_DIR
 
 # Evaluation settings
-CFG_NAME="config_0"
-SPLIT="both"           # "train", "test", or "both"
-NUM_ENVS=12
 ACTION_MODE="delta"
 DTYPE="bfloat16"
 EVAL_ROUNDS=1
-N_ACTION_STEPS=20      # Replanning frequency (should match training)
+N_ACTION_STEPS=20
+NUM_ENVS=12
 
 cd ${PROJ_ROOT}
 
 ###############################################################################
-# Run evaluation
+# Run evaluation: 12 tasks, each handling 2 configs on both train+test
 ###############################################################################
-echo "Evaluating checkpoint: ${CKPT_PATH}"
-echo "Results will be saved to: ${RESULT_DIR}"
+srun --ntasks=12 --ntasks-per-node=4 bash -c '
+    START=$((SLURM_PROCID * 2))
+    END=$(((SLURM_PROCID + 1) * 2))
+    GPU_ID=$SLURM_LOCALID
+    export CUDA_VISIBLE_DEVICES=$GPU_ID
 
-srun python evaluation/wiser/inference.py \
-    --ckpt_path="${CKPT_PATH}" \
-    --cfg_name="${CFG_NAME}" \
-    --split="${SPLIT}" \
-    --num_envs=${NUM_ENVS} \
-    --action_mode="${ACTION_MODE}" \
-    --dtype="${DTYPE}" \
-    --eval_rounds=${EVAL_ROUNDS} \
-    --n_action_steps=${N_ACTION_STEPS} \
-    --result_dir="${RESULT_DIR}"
+    echo "[Node $(hostname), PROCID=$SLURM_PROCID, GPU=$GPU_ID] Evaluating subsets $START to $((END - 1))"
 
-echo "Done. Results in ${RESULT_DIR}"
+    python '"$SCRIPT_PATH"' \
+        --ckpt_path='"$CKPT_PATH"' \
+        --start_subset=$START \
+        --end_subset=$END \
+        --split=both \
+        --num_envs='"$NUM_ENVS"' \
+        --action_mode='"$ACTION_MODE"' \
+        --dtype='"$DTYPE"' \
+        --eval_rounds='"$EVAL_ROUNDS"' \
+        --n_action_steps='"$N_ACTION_STEPS"' \
+        --result_dir='"$RESULT_DIR"' \
+        > "'"$RESULT_DIR"'/node_${SLURM_PROCID}.log" 2>&1
+'
+
+echo "All rollouts complete."
+
+# Final aggregation (runs on the head node)
+echo "Running final aggregation..."
+python $SCRIPT_PATH \
+    --aggregate_only \
+    --result_dir=$RESULT_DIR
+
+echo "Done. Results in $RESULT_DIR"
