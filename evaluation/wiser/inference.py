@@ -74,6 +74,17 @@ def build_policy_and_transforms(ckpt_path, stats_key, resize_size, dtype):
     # Handle nested stats (keyed by robot type) or flat structure
     if stats_key and stats_key in stats:
         stats = stats[stats_key]
+    elif "observation.state" not in stats:
+        # Auto-detect: stats are keyed by robot type, pick the first one
+        robot_keys = list(stats.keys())
+        if len(robot_keys) == 1:
+            print(f"Auto-detected stats key: {robot_keys[0]}")
+            stats = stats[robot_keys[0]]
+        else:
+            raise KeyError(
+                f"stats.json has multiple robot-type keys {robot_keys} but no "
+                f"--stats_key was provided. Please specify one explicitly."
+            )
 
     stat_keys = ["min", "max", "mean", "std"]
     state_stat = {"observation.state": {k: np.asarray(stats["observation.state"][k]) for k in stat_keys}}
